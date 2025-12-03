@@ -12,7 +12,7 @@ function encode(bytes: Uint8Array) {
 }
 
 export class LiveClient {
-  private session: any = null;
+  private activeSession: any = null;
   private onControlUpdate: (state: ControlState) => void;
   private stream: MediaStream | null = null;
   private videoInterval: number | undefined;
@@ -62,14 +62,13 @@ export class LiveClient {
       // Initialize Audio Context for streaming
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
 
+      // Create session
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         callbacks: {
           onopen: () => {
             console.log("Gemini Live Session Opened");
             this.isConnected = true;
-            this.startVideoStreaming(videoElement, sessionPromise);
-            this.startAudioStreaming(sessionPromise);
           },
           onmessage: (message: LiveServerMessage) => {
             if (message.toolCall) {
@@ -82,15 +81,19 @@ export class LiveClient {
                   });
                   
                   // Acknowledge the tool call
-                  sessionPromise.then(session => {
-                    session.sendToolResponse({
-                      functionResponses: {
-                        id: fc.id,
-                        name: fc.name,
-                        response: { result: "ok" }
-                      }
-                    }).catch(e => console.error("Failed to send tool response", e));
-                  });
+                  if (this.activeSession) {
+                    try {
+                      this.activeSession.sendToolResponse({
+                        functionResponses: {
+                          id: fc.id,
+                          name: fc.name,
+                          response: { result: "ok" }
+                        }
+                      });
+                    } catch (e) {
+                      console.error("Failed to send tool response", e);
+                    }
+                  }
                 }
               }
             }
@@ -98,10 +101,12 @@ export class LiveClient {
           onclose: () => {
              console.log("Gemini Live Session Closed");
              this.isConnected = false;
+             this.activeSession = null;
           },
           onerror: (e) => {
              console.error("Gemini Live Error", e);
              this.isConnected = false;
+             this.activeSession = null;
           },
         },
         config: {
@@ -117,22 +122,27 @@ export class LiveClient {
         },
       });
 
-      this.session = await sessionPromise;
+      this.activeSession = await sessionPromise;
+      
+      // Start streaming only after session is fully established
+      this.startVideoStreaming(videoElement);
+      this.startAudioStreaming();
 
     } catch (err) {
       console.error("Failed to connect to Live API", err);
       this.isConnected = false;
-      throw err; // Re-throw to let App know connection failed
+      this.activeSession = null;
+      throw err; 
     }
   }
 
-  private startVideoStreaming(videoEl: HTMLVideoElement, sessionPromise: Promise<any>) {
+  private startVideoStreaming(videoEl: HTMLVideoElement) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     const FRAME_RATE = 2; // Limit frame rate
 
     this.videoInterval = window.setInterval(() => {
-      if (!this.isConnected || !ctx || !videoEl.videoWidth) return;
+      if (!this.isConnected || !this.activeSession || !ctx || !videoEl.videoWidth) return;
 
       try {
         canvas.width = videoEl.videoWidth * 0.5; 
@@ -141,28 +151,26 @@ export class LiveClient {
 
         const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
         
-        sessionPromise.then(session => {
-          session.sendRealtimeInput({
-            media: {
-              mimeType: 'image/jpeg',
-              data: base64
-            }
-          }).catch((e: any) => console.debug("Video stream error (ignored):", e));
+        this.activeSession.sendRealtimeInput({
+          media: {
+            mimeType: 'image/jpeg',
+            data: base64
+          }
         });
       } catch (e) {
-        console.error("Error capturing video frame:", e);
+        console.debug("Video stream error (ignored):", e);
       }
     }, 1000 / FRAME_RATE);
   }
 
-  private startAudioStreaming(sessionPromise: Promise<any>) {
+  private startAudioStreaming() {
     if (!this.audioContext || !this.stream) return;
 
     this.source = this.audioContext.createMediaStreamSource(this.stream);
     this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
 
     this.processor.onaudioprocess = (e) => {
-      if (!this.isConnected) return;
+      if (!this.isConnected || !this.activeSession) return;
       
       try {
         const inputData = e.inputBuffer.getChannelData(0);
@@ -175,16 +183,14 @@ export class LiveClient {
         
         const base64Audio = encode(new Uint8Array(int16.buffer));
 
-        sessionPromise.then(session => {
-          session.sendRealtimeInput({
-            media: {
-              mimeType: 'audio/pcm;rate=16000',
-              data: base64Audio
-            }
-          }).catch((e: any) => console.debug("Audio stream error (ignored):", e));
+        this.activeSession.sendRealtimeInput({
+          media: {
+            mimeType: 'audio/pcm;rate=16000',
+            data: base64Audio
+          }
         });
       } catch (err) {
-        console.error("Error processing audio:", err);
+        console.debug("Audio stream error (ignored):", err);
       }
     };
 
@@ -209,14 +215,14 @@ export class LiveClient {
     }
     
     // Attempt to close session if it exists
-    if (this.session) {
+    if (this.activeSession) {
       try { 
           // Check if close method exists on the session or client
-          if (typeof this.session.close === 'function') {
-              this.session.close();
+          if (typeof this.activeSession.close === 'function') {
+              this.activeSession.close();
           }
       } catch(e) { /* ignore */ }
     }
-    this.session = null;
+    this.activeSession = null;
   }
 }

@@ -81,8 +81,22 @@ const App: React.FC = () => {
         });
     }
 
-    // Auto-load graph data from Quine
-    handleExecuteQuery(quineUrl, INITIAL_QUERY, {});
+    // Auto-load graph data from Quine silently
+    // If it fails, we keep the demo data and log to console, avoiding a big error banner on startup
+    const loadInitialData = async () => {
+        try {
+            const result = await executeQuineQuery(quineUrl, INITIAL_QUERY, {});
+            const newData = parseQuineResult(result);
+            if (newData.nodes.length > 0) {
+                setGraphData(newData);
+            }
+        } catch (e) {
+            console.warn("Initial Quine connection failed (using demo data):", e);
+            // We do NOT set the error state here to avoid disrupting the UX on load.
+            // The user can manually click 'Run Query' to see the specific connection error.
+        }
+    };
+    loadInitialData();
 
     return () => {
       client.disconnect();
