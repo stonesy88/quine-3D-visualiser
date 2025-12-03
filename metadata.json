@@ -1,0 +1,8 @@
+{
+  "name": "Quine 3D Entity Resolution",
+  "description": "A real-time 3D graph visualizer controlled by hand gestures via Gemini Live API. Features Quine graph query generation and dynamic particle systems.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
